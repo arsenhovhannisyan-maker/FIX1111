@@ -1,0 +1,13 @@
+services:
+  fix-client:
+    build: .
+    container_name: ntpro-fix-client
+    restart: unless-stopped
+    volumes:
+      - .:/app
+      - ./log:/app/log
+      - ./store:/app/store
+    environment:
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
