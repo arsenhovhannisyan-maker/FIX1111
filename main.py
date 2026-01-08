@@ -33,7 +33,7 @@ class FIXApplication(fix.Application):
             print("[ADMIN] Preparing Logon")
 
             # Добавляем пароль
-            # message.setField(fix.Password('Df2Hy8nM'))
+            message.setField(fix.Password('Df2Hy8nM'))
 
             # Пытаемся установить ResetSeqNumFlag в N если есть
             try:
@@ -71,8 +71,13 @@ class FIXApplication(fix.Application):
 
         print(f"[APP] Recv: {msg_type_val}")
 
-        if msg_type_val == fix.MsgType_MarketDataSnapshot:
-            self.process_snapshot(message)
+        if msg_type_val == "2":  # ResendRequest
+            self.handleResendRequest(message, sessionID)
+        elif msg_type_val == "h":  # Trading Session Status
+            print("[APP] TradingSessionStatus received")
+            # Теперь можно начинать торговлю
+        else:
+            print(f"[APP] Unhandled message type: {msg_type_val}")
 
     def process_snapshot(self, message):
         try:
