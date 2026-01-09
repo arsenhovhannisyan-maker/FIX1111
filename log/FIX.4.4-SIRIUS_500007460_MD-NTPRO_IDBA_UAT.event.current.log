@@ -1,26 +1,16 @@
-20260109-07:30:37.074964000 : Created session
-20260109-07:30:37.075811000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
-20260109-07:30:37.244843000 : Initiated logon request
-20260109-07:30:37.350235000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
-20260109-07:30:37.350527000 : Received logon response
-20260109-07:39:40.490204000 : Initiated logout request
-20260109-07:39:40.600050000 : Received logout response
-20260109-07:39:40.601719000 : Disconnecting
-20260109-07:39:48.707843000 : Created session
-20260109-07:39:48.708727000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
-20260109-07:39:48.838761000 : Initiated logon request
-20260109-07:39:48.945286000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
-20260109-07:39:48.945961000 : Received logon response
-20260109-07:41:39.225795000 : Initiated logout request
-20260109-07:41:39.344502000 : Received logout response
-20260109-07:41:39.345208000 : Disconnecting
-20260109-07:41:47.697844000 : Created session
-20260109-07:41:47.698678000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
-20260109-07:41:47.886309000 : Initiated logon request
-20260109-07:41:47.992722000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
-20260109-07:41:47.993066000 : Received logon response
-20260109-07:45:54.526039000 : Created session
-20260109-07:45:54.526908000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
-20260109-07:45:54.662287000 : Initiated logon request
-20260109-07:45:54.770541000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
-20260109-07:45:54.770914000 : Received logon response
+20260109-09:17:19.201740000 : Created session
+20260109-09:17:19.202560000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
+20260109-09:17:19.323358000 : Initiated logon request
+20260109-09:17:19.426898000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
+20260109-09:17:19.427114000 : Received logon response
+20260109-09:17:53.080838000 : Initiated logout request
+20260109-09:17:53.187123000 : Received logout response
+20260109-09:17:53.187403000 : Disconnecting
+20260109-09:18:16.969027000 : Created session
+20260109-09:18:16.970245000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
+20260109-09:18:17.235626000 : Initiated logon request
+20260109-09:18:17.360930000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
+20260109-09:18:17.361164000 : Received logon response
+20260109-09:18:46.676183000 : Initiated logout request
+20260109-09:18:46.798834000 : Received logout response
+20260109-09:18:46.799154000 : Disconnecting
