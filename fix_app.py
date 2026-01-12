@@ -1,7 +1,7 @@
 import quickfix as fix
 import quickfix44 as fix44
-from datetime import datetime
 from threading import Timer
+from datetime import datetime, timedelta
 
 market_data_store = {}
 
@@ -20,6 +20,17 @@ class FIXApplication(fix.Application):
     def onLogon(self, sessionID):
         print("[SESSION] Logon OK")
         self.logon_sent = True
+        Timer(1.0, self.send_security_list_request).start()
+
+    def send_security_list_request(self):
+        try:
+            msg = fix44.SecurityListRequest()
+            msg.setField(fix.SecurityReqID(f"SEC_{datetime.now().strftime('%H%M%S')}"))
+            msg.setField(fix.SecurityListRequestType(0))  # 0 = All securities
+            fix.Session.sendToTarget(msg, self.session_id)
+            print("[SEND] SecurityListRequest sent")
+        except Exception as e:
+            print(f"[ERROR] Sending SecurityListRequest: {e}")
 
     def onLogout(self, sessionID):
         print("[SESSION] Logout")
@@ -104,12 +115,15 @@ class FIXApplication(fix.Application):
                 pass
             elif msg_type_val == "1":
                 pass
+            elif msg_type_val == "S":
+                self.processQuote(message)
+            elif msg_type_val == "AG":
+                self.processQuoteRequestReject(message)
             else:
                 print(f"[APP] Unhandled message type: {msg_type_val}")
 
         except Exception as e:
             print(f"[ERROR] Processing message {msg_type_val}: {e}")
-
 
     def processTradingSessionStatus(self, message):
         try:
@@ -177,7 +191,6 @@ class FIXApplication(fix.Application):
         try:
             symbol = fix.Symbol()
             md_req_id = fix.MDReqID()
-
             message.getField(symbol)
             message.getField(md_req_id)
 
@@ -185,59 +198,54 @@ class FIXApplication(fix.Application):
             req_id = md_req_id.getValue()
 
             print(f"[DATA] Snapshot for {sym} (ReqID: {req_id})")
-
             self.market_data_subscriptions[sym] = req_id
 
             no_entries = fix.NoMDEntries()
             if not message.isSetField(no_entries):
+                market_data_store[sym] = {"symbol": sym, "bids": [], "asks": [], "last_update": datetime.now().isoformat()}
                 print(f"[DATA] No entries for {sym}")
-                market_data_store[sym] = {
-                    "symbol": sym,
-                    "bids": [],
-                    "asks": [],
-                    "last_update": datetime.now().isoformat()
-                }
                 return
 
             message.getField(no_entries)
             count = no_entries.getValue()
 
-            bids = []
-            asks = []
-
-            group = fix44.MarketDataSnapshotFullRefresh().NoMDEntries()
+            bids, asks = [], []
+            group = fix44.MarketDataSnapshotFullRefresh.NoMDEntries()
 
             for i in range(1, count + 1):
                 message.getGroup(i, group)
 
                 entry_type = fix.MDEntryType()
-                price = fix.MDEntryPx()
-                size = fix.MDEntrySize()
+                if not group.isSetField(entry_type):
+                    continue
+                group.getField(entry_type)
+                entry_type_val = entry_type.getValue()
 
-                if group.isSetField(entry_type):
-                    group.getField(entry_type)
-                    entry_type_val = entry_type.getValue()
+                price_val = 0.0
+                size_val = 0.0
 
-                    price_val = 0.0
-                    size_val = 0.0
+                price_field = fix.MDEntryPx()
+                if group.isSetField(price_field):
+                    group.getField(price_field)
+                    try:
+                        price_val = float(price_field.getValue())
+                    except ValueError:
+                        price_val = 0.0
 
-                    if group.isSetField(price):
-                        group.getField(price)
-                        price_val = float(price.getValue())
+                size_field = fix.MDEntrySize()
+                if group.isSetField(size_field):
+                    group.getField(size_field)
+                    try:
+                        size_val = float(size_field.getValue())
+                    except ValueError:
+                        size_val = 0.0
 
-                    if group.isSetField(size):
-                        group.getField(size)
-                        size_val = float(size.getValue())
+                entry = {"price": price_val, "size": size_val}
 
-                    entry = {
-                        "price": price_val,
-                        "size": size_val
-                    }
-
-                    if entry_type_val == '0':
-                        bids.append(entry)
-                    elif entry_type_val == '1':
-                        asks.append(entry)
+                if entry_type_val == '0':
+                    bids.append(entry)
+                elif entry_type_val == '1':
+                    asks.append(entry)
 
             market_data_store[sym] = {
                 "symbol": sym,
@@ -251,13 +259,12 @@ class FIXApplication(fix.Application):
 
         except Exception as e:
             print(f"[ERROR] Processing snapshot: {e}")
+            import traceback
+            print(f"[DEBUG] {traceback.format_exc()}")
 
     def processMarketDataIncremental(self, message):
         try:
-            md_req_id = fix.MDReqID()
-            message.getField(md_req_id)
             symbol = None
-
             no_entries = fix.NoMDEntries()
             message.getField(no_entries)
             count = no_entries.getValue()
@@ -266,15 +273,18 @@ class FIXApplication(fix.Application):
                 group = fix44.MarketDataIncrementalRefresh().NoMDEntries()
                 message.getGroup(i, group)
 
+                sym_field = fix.Symbol()
                 md_update_action = fix.MDUpdateAction()
                 entry_type = fix.MDEntryType()
                 price = fix.MDEntryPx()
                 size = fix.MDEntrySize()
-                sym_field = fix.Symbol()
 
                 if group.isSetField(sym_field):
                     group.getField(sym_field)
                     symbol = sym_field.getValue()
+
+                if not symbol:
+                    continue  # пропуск, если нет символа
 
                 if symbol not in market_data_store:
                     market_data_store[symbol] = {"symbol": symbol, "bids": [], "asks": [], "last_update": None}
@@ -291,22 +301,23 @@ class FIXApplication(fix.Application):
 
                 target_list = market_data_store[symbol]["bids"] if entry_type_val == '0' else market_data_store[symbol]["asks"]
 
-                if action == '0':  # New
-                    target_list.append({"price": price_val, "size": size_val})
-                elif action == '1':  # Change
+                if action == '0':
+                    if not any(e["price"] == price_val for e in target_list):
+                        target_list.append({"price": price_val, "size": size_val})
+                elif action == '1':
                     for entry in target_list:
                         if entry["price"] == price_val:
                             entry["size"] = size_val
                             break
-                elif action == '2':  # Delete
+                elif action == '2':
                     target_list[:] = [entry for entry in target_list if entry["price"] != price_val]
 
-            # Sort book
-            market_data_store[symbol]["bids"] = sorted(market_data_store[symbol]["bids"], key=lambda x: x["price"], reverse=True)
-            market_data_store[symbol]["asks"] = sorted(market_data_store[symbol]["asks"], key=lambda x: x["price"])
-            market_data_store[symbol]["last_update"] = datetime.now().isoformat()
+            if symbol:
+                market_data_store[symbol]["bids"] = sorted(market_data_store[symbol]["bids"], key=lambda x: x["price"], reverse=True)
+                market_data_store[symbol]["asks"] = sorted(market_data_store[symbol]["asks"], key=lambda x: x["price"])
+                market_data_store[symbol]["last_update"] = datetime.now().isoformat()
 
-            print(f"[DATA] Incremental update for {symbol}")
+                print(f"[DATA] Incremental update for {symbol}")
 
         except Exception as e:
             print(f"[ERROR] Processing incremental: {e}")
@@ -330,7 +341,21 @@ class FIXApplication(fix.Application):
 
     def processSecurityList(self, message):
         try:
-            print("[DATA] Received Security List")
+            no_related_sym = fix.NoRelatedSym()
+            if message.isSetField(no_related_sym):
+                message.getField(no_related_sym)
+                count = no_related_sym.getValue()
+                print(f"[DATA] SecurityList with {count} instruments")
+
+                group = fix44.SecurityList.NoRelatedSym()
+                for i in range(1, count + 1):
+                    message.getGroup(i, group)
+                    symbol = fix.Symbol()
+                    if group.isSetField(symbol):
+                        group.getField(symbol)
+                        print(f"[DATA] Instrument: {symbol.getValue()}")
+            else:
+                print("[DATA] SecurityList received (empty or no symbols)")
         except Exception as e:
             print(f"[ERROR] Processing security list: {e}")
 
@@ -360,15 +385,31 @@ class FIXApplication(fix.Application):
             print("[WARN] Cannot subscribe - session not active")
             return
 
-        instruments = ["EUR/USD", "GBP/USD", "USD/JPY", "EUR/GBP"]
+        instruments = ["EUR/USD", "GBP/USD", "USD/CAD", "EUR/USD_ON", "GBP/USD_TN", "USD/CAD_TOM1W", "EUR/USD_2W"]
+
+        Timer(0.1, lambda: self.send_security_definition_request("EUR/USD", True)).start()
+        Timer(0.2, lambda: self.send_security_definition_request("GBP/USD", True)).start()
 
         for i, symbol in enumerate(instruments):
             try:
-                delay = i * 1.0
+                delay = i * 0.3
                 Timer(delay, lambda sym=symbol: self.send_market_data_request(sym)).start()
                 print(f"[SEND] Scheduled subscription to {symbol} in {delay}s")
             except Exception as e:
                 print(f"[ERROR] Scheduling subscription for {symbol}: {e}")
+
+        Timer(6.0, lambda: self.send_quote_request("EUR/USD", 100000)).start()
+        Timer(6.5, lambda: self.send_quote_request("EUR/USD_1W", 100000)).start()
+        Timer(7.0, lambda: self.send_quote_request("EUR/USD_ON", 100000)).start()
+        Timer(7.5, lambda: self.send_quote_request("GBP/USD_TN", 100000)).start()
+        Timer(8.0, lambda: self.send_quote_request("USD/CAD_TOM1W", 100000)).start()
+
+        Timer(8.5, lambda: self.send_quote_request("EUR/USD_OUT", 100000)).start()  # Broken date
+        Timer(9.0, lambda: self.send_quote_request("EUR/USD_SWAP", 100000)).start()  # Broken dates
+
+        Timer(9.5, lambda: self.send_quote_request("EUD/USK_SPOT", 100000)).start()
+
+        Timer(10.0, lambda: self.send_quote_request("USD_OUT", 100000)).start()
 
     def send_market_data_request(self, symbol):
         try:
@@ -406,3 +447,107 @@ class FIXApplication(fix.Application):
         msg_type_val = msg_type.getValue()
 
         print(f"[APP] Send: {msg_type_val}")
+
+    def send_security_definition_request(self, symbol, subscribe=True):
+        try:
+            msg = fix44.SecurityDefinitionRequest()
+            msg.setField(fix.SecurityReqID(f"DEF_{symbol.replace('/', '')}"))
+            msg.setField(fix.SecurityRequestType(1 if subscribe else 2))
+
+            group = fix44.SecurityDefinitionRequest.NoRelatedSym()
+            group.setField(fix.Symbol(symbol))
+            msg.addGroup(group)
+
+            fix.Session.sendToTarget(msg, self.session_id)
+            print(f"[SEND] SecurityDefinitionRequest for {symbol}")
+        except Exception as e:
+            print(f"[ERROR] Sending SecurityDefinitionRequest: {e}")
+
+    def send_market_data_unsubscribe(self, symbol):
+        try:
+            if symbol in self.market_data_subscriptions:
+                req_id = self.market_data_subscriptions[symbol]
+                msg = fix44.MarketDataRequest()
+                msg.setField(fix.MDReqID(req_id))
+                msg.setField(fix.SubscriptionRequestType('2'))
+                msg.setField(fix.MarketDepth(0))
+                msg.setField(fix.MDUpdateType(1))
+
+                related_sym_group = fix44.MarketDataRequest.NoRelatedSym()
+                related_sym_group.setField(fix.Symbol(symbol))
+                msg.addGroup(related_sym_group)
+
+                entry_types = ['0', '1']
+                for et in entry_types:
+                    md_entry_group = fix44.MarketDataRequest.NoMDEntryTypes()
+                    md_entry_group.setField(fix.MDEntryType(et))
+                    msg.addGroup(md_entry_group)
+
+                fix.Session.sendToTarget(msg, self.session_id)
+                del self.market_data_subscriptions[symbol]
+                print(f"[SEND] Unsubscribed from {symbol}")
+        except Exception as e:
+            print(f"[ERROR] Unsubscribing from {symbol}: {e}")
+
+    def send_quote_request(self, symbol, quantity):
+        try:
+            msg = fix44.QuoteRequest()
+            msg.setField(fix.QuoteReqID(f"QR_{symbol.replace('/', '')}"))
+
+            group = fix44.QuoteRequest.NoRelatedSym()
+            group.setField(fix.Symbol(symbol))
+            group.setField(fix.OrderQty(quantity))
+
+            today = datetime.now()
+
+            if "_ON" in symbol:
+                sett_date = (today + timedelta(days=1)).strftime("%Y%m%d")
+                group.setField(fix.FutSettDate(sett_date))
+
+            elif "_TN" in symbol:
+                sett_date = (today + timedelta(days=2)).strftime("%Y%m%d")
+                group.setField(fix.FutSettDate(sett_date))
+
+            elif "_TOM" in symbol:
+                sett_date = (today + timedelta(days=1)).strftime("%Y%m%d")
+                group.setField(fix.FutSettDate(sett_date))
+
+            elif "_1W" in symbol:
+                sett_date = (today + timedelta(days=7)).strftime("%Y%m%d")
+                group.setField(fix.FutSettDate(sett_date))
+
+            elif "_2W" in symbol:
+                sett_date = (today + timedelta(days=14)).strftime("%Y%m%d")
+                group.setField(fix.FutSettDate(sett_date))
+
+            elif "_OUT" in symbol:
+                sett_date = (today + timedelta(days=30)).strftime("%Y%m%d")
+                group.setField(fix.FutSettDate(sett_date))
+
+            msg.addGroup(group)
+
+            fix.Session.sendToTarget(msg, self.session_id)
+            print(f"[SEND] QuoteRequest for {symbol} {quantity}")
+
+        except Exception as e:
+            print(f"[ERROR] Sending QuoteRequest: {e}")
+
+    def processQuote(self, message):
+        try:
+            quote_id = fix.QuoteID()
+            symbol = fix.Symbol()
+            message.getField(quote_id)
+            message.getField(symbol)
+            print(f"[QUOTE] Received for {symbol.getValue()}")
+        except Exception as e:
+            print(f"[ERROR] Processing quote: {e}")
+
+    def processQuoteRequestReject(self, message):
+        try:
+            quote_req_id = fix.QuoteReqID()
+            text = fix.Text()
+            message.getField(quote_req_id)
+            reject_text = text.getValue() if message.isSetField(text) else "No reason"
+            print(f"[QUOTE REJECT] {quote_req_id.getValue()}: {reject_text}")
+        except Exception as e:
+            print(f"[ERROR] Processing quote reject: {e}")
