@@ -4,7 +4,8 @@ from threading import Timer
 from fastapi import FastAPI
 import uvicorn
 from contextlib import asynccontextmanager
-from fix_app import FIXApplication, market_data_store
+from fix_app import FIXApplication
+from data_store import market_data_store
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,14 +35,15 @@ async def get_market_data():
     return {
         "status": "connected" if market_data_store else "waiting",
         "timestamp": datetime.now().isoformat(),
-        "instruments_count": len(market_data_store),
-        "data": market_data_store
+        "instruments_count": len(market_data_store.keys()),
+        "data": market_data_store.get_all()
     }
 
 @app.get("/market-data/{symbol}")
 async def get_market_data_symbol(symbol: str):
-    if symbol in market_data_store:
-        return market_data_store[symbol]
+    if data := market_data_store.get(symbol):
+        return data
+
     return {
         "error": f"Instrument {symbol} not found",
         "available_instruments": list(market_data_store.keys())

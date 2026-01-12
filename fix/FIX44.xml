@@ -1236,6 +1236,15 @@
    <field name='TradingSessionSubID' required='N' />
    <field name='SubscriptionRequestType' required='N' />
   </message>
+  <message name="SecurityList" msgtype="y" msgcat="app">
+   <field name="SecurityResponseID" required="Y"/>
+   <field name="SecurityRequestResult" required="Y"/>
+   <field name="TotNoRelatedSym" required="N"/>
+   <field name="LastFragment" required="N"/>
+   <group name="NoRelatedSym" required="N">
+     <field name="Symbol" required="N"/>
+   </group>
+  </message>
   <message name='DerivativeSecurityList' msgtype='AA' msgcat='app'>
    <field name='SecurityReqID' required='Y' />
    <field name='SecurityResponseID' required='Y' />
