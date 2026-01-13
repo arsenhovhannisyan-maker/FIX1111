@@ -15,7 +15,7 @@ class FIXApplication(fix.Application):
         self.logon_sent = False
         self.trading_session_active = False
         self.market_data_subscriptions = {}
-        self.fix_password = os.getenv('FIX_PASSWORD')
+        self.fix_password = os.getenv('FIX_PASSWORD_MD')
 
         if not self.fix_password:
             print("[ERROR] FIX_PASSWORD not found in .env file!")
@@ -86,7 +86,7 @@ class FIXApplication(fix.Application):
         message.getHeader().getField(msg_type)
         msg_type_val = msg_type.getValue()
 
-        print(f"[APP] Recv: {msg_type_val}")
+        # print(f"[APP] Recv: {msg_type_val}")
 
         try:
             if msg_type_val == "h":
@@ -347,9 +347,9 @@ class FIXApplication(fix.Application):
                     'last_update': datetime.now().isoformat()
                 })
 
-                print(f"[DATA] Incremental update for {current_symbol}: "
-                      f"{len(symbol_updates['bids'])} bid updates, "
-                      f"{len(symbol_updates['asks'])} ask updates")
+                # print(f"[DATA] Incremental update for {current_symbol}: "
+                #       f"{len(symbol_updates['bids'])} bid updates, "
+                #       f"{len(symbol_updates['asks'])} ask updates")
 
         except Exception as e:
             print(f"[ERROR] Processing incremental: {e}")
