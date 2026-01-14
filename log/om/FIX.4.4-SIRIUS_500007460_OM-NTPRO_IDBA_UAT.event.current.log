@@ -1,5 +1,0 @@
-20260112-17:11:36.076034000 : Created session
-20260112-17:11:36.076900000 : Connecting to dsp-east-uat.ntprog.com on port 24422 (Source :0)
-20260112-17:11:36.295754000 : Initiated logon request
-20260112-17:11:36.430014000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
-20260112-17:11:36.430569000 : Received logon response

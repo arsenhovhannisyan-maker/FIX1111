@@ -36,6 +36,10 @@ class ThreadSafeMarketData:
                 }
             return result
 
+    def get_count(self) -> int:
+        with self._lock:
+            return len(self._data)
+
     def keys(self):
         with self._lock:
             return list(self._data.keys())
