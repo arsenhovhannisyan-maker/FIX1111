@@ -1,4 +1,3 @@
-# fix_om_session.py
 import quickfix as fix
 import quickfix44 as fix44
 from datetime import datetime
@@ -7,6 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+class ConfigurationError(Exception):
+    pass
 class OrderSession(fix.Application):
     def __init__(self):
         super().__init__()
@@ -20,8 +21,7 @@ class OrderSession(fix.Application):
 
         if not self.fix_password:
             print("[ERROR] FIX_PASSWORD_OM not found in .env file!")
-            print("[ERROR] Add to .env: FIX_PASSWORD_OM=y3pWsv8a")
-            exit(1)
+            raise ConfigurationError("Missing FIX password")
 
     def onCreate(self, sessionID):
         self.session_id = sessionID
@@ -187,7 +187,7 @@ class OrderSession(fix.Application):
 
                 print(f"[OM] ✅ Order {cl_ord_id_val} updated in store")
 
-                if ord_status_val in ["2", "4", "8"]:  # Filled, Canceled, Rejected
+                if ord_status_val in ["2", "4", "8"]:
                     print(f"[OM] 🏁 Order {cl_ord_id_val} completed: {status_text}")
 
             self.execution_reports.append({
@@ -291,13 +291,17 @@ class OrderSession(fix.Application):
         else:
             print(f"[OM] Send: {msg_type_val}")
 
-    def send_new_order_single(self, symbol, side, quantity, price=None, order_type="2", time_in_force="0"):
+    def send_new_order_single(self, symbol, side, quantity, price=None, order_type="2", time_in_force=None):
         try:
             if not self.session_id or not self.trading_session_open:
                 print("[OM] Cannot send order - not ready")
                 return None
 
-            self.last_clordid += 1
+            import threading
+            self._clordid_lock = threading.Lock()
+            with self._clordid_lock:
+                self.last_clordid += 1
+
             import time
             timestamp = int(time.time() * 1000) % 1000000
             cl_ord_id = f"OM{self.last_clordid:04d}_{timestamp:06d}"
@@ -309,8 +313,12 @@ class OrderSession(fix.Application):
             msg.setField(fix.Side(side))
             msg.setField(fix.OrderQty(quantity))
             msg.setField(fix.OrdType(order_type))
-            msg.setField(fix.TimeInForce(time_in_force))
             msg.setField(fix.StringField(336, "Trade Data"))
+
+            if order_type == "1":
+                msg.setField(fix.TimeInForce("3"))
+            elif order_type == "2":
+                msg.setField(fix.TimeInForce("1"))
 
             transact_time = fix.TransactTime()
             transact_time.setString(datetime.utcnow().strftime("%Y%m%d-%H:%M:%S.%f")[:-3])
@@ -374,7 +382,11 @@ class OrderSession(fix.Application):
                 print(f"[OM] Order {orig_cl_ord_id} already completed (status: {current_status})")
                 return False
 
-            self.last_clordid += 1
+            import threading
+            self._clordid_lock = threading.Lock()
+            with self._clordid_lock:
+                self.last_clordid += 1
+
             cl_ord_id = f"CXL{self.last_clordid:06d}"
 
             symbol = order_info.get('symbol')
@@ -502,7 +514,6 @@ class OrderSession(fix.Application):
                 }
                 print(f"[OM]   Reject Reason: {reason_code} - {reason_map.get(reason_code, 'Unknown')}")
 
-            # Пытаемся найти ClOrdID в тексте
             text_val = text.getValue() if text.isSet() else ""
             import re
             cl_ord_id_match = re.search(r'ClOrdID[=:\s]*([A-Z0-9_]+)', text_val)
@@ -510,12 +521,10 @@ class OrderSession(fix.Application):
                 affected_cl_ord_id = cl_ord_id_match.group(1)
                 print(f"[OM]   Affected ClOrdID: {affected_cl_ord_id}")
 
-                # Обновляем статус ордера в хранилище
                 if affected_cl_ord_id in self.order_store:
                     self.order_store[affected_cl_ord_id]['status'] = 'REJECTED'
                     self.order_store[affected_cl_ord_id]['reject_reason'] = text_val
 
-            # Логируем полное сообщение для отладки
             print(f"[OM]   Raw message: {message.toString().replace(chr(1), '|')}")
 
         except Exception as e:

@@ -16,6 +16,7 @@ class FIXApplication(fix.Application):
         self.trading_session_active = False
         self.market_data_subscriptions = {}
         self.fix_password = os.getenv('FIX_PASSWORD_MD')
+        self.quote_rejects = []
 
         if not self.fix_password:
             print("[ERROR] FIX_PASSWORD not found in .env file!")
@@ -29,22 +30,6 @@ class FIXApplication(fix.Application):
     def onLogon(self, sessionID):
         print("[SESSION] Logon OK")
         self.logon_sent = True
-        # Timer(1.0, self.send_security_list_request).start()
-
-    # def send_security_list_request(self):
-    #     try:
-    #         req_id = f"SEC_{datetime.now().strftime('%H%M%S_%f')}"
-    #
-    #         msg = fix44.SecurityListRequest()
-    #         msg.setField(fix.SecurityReqID(req_id))
-    #         msg.setField(fix.SecurityListRequestType(0))
-    #         msg.setField(fix.TradingSessionID("Market Data"))
-    #
-    #         fix.Session.sendToTarget(msg, self.session_id)
-    #         print("[SEND] SecurityListRequest sent correctly")
-    #
-    #     except Exception as e:
-    #         print(f"[ERROR] Sending SecurityListRequest: {e}")
 
     def onLogout(self, sessionID):
         print("[SESSION] Logout")
@@ -58,10 +43,6 @@ class FIXApplication(fix.Application):
         if msg_type.getValue() == fix.MsgType_Logon:
             print("[ADMIN] Preparing Logon")
             message.setField(fix.Password(self.fix_password))
-            # try:
-                # message.setField(fix.BoolField(141, True))
-            # except Exception as e:
-            #     print(f"[WARN] Could not set ResetSeqNumFlag: {e}")
 
             print("[ADMIN] Logon prepared")
 
@@ -86,7 +67,6 @@ class FIXApplication(fix.Application):
         message.getHeader().getField(msg_type)
         msg_type_val = msg_type.getValue()
 
-        # print(f"[APP] Recv: {msg_type_val}")
 
         try:
             if msg_type_val == "h":
@@ -101,6 +81,8 @@ class FIXApplication(fix.Application):
                 self.processSecurityList(message)
             elif msg_type_val == "4":
                 self.processSequenceReset(message)
+            elif msg_type_val == "AG":
+                self.processQuoteRequestReject(message)
             else:
                 print(f"[APP] Unhandled message type: {msg_type_val}")
 
@@ -142,7 +124,7 @@ class FIXApplication(fix.Application):
                 if status_code == "2":
                     self.trading_session_active = True
                     print("[APP] Market Data session is OPEN")
-                    Timer(2.0, self.subscribe_all).start()
+                    Timer(1.0, self.send_security_list_request).start()
                 else:
                     self.trading_session_active = False
                     print(f"[APP] Market Data session NOT available: {status_text}")
@@ -347,9 +329,6 @@ class FIXApplication(fix.Application):
                     'last_update': datetime.now().isoformat()
                 })
 
-                # print(f"[DATA] Incremental update for {current_symbol}: "
-                #       f"{len(symbol_updates['bids'])} bid updates, "
-                #       f"{len(symbol_updates['asks'])} ask updates")
 
         except Exception as e:
             print(f"[ERROR] Processing incremental: {e}")
@@ -373,45 +352,102 @@ class FIXApplication(fix.Application):
 
     def processSecurityList(self, message):
         try:
+            print("[APP] Processing SecurityList")
+
+            security_req_id = fix.SecurityReqID()
+            if message.isSetField(security_req_id):
+                message.getField(security_req_id)
+                req_id = security_req_id.getValue()
+                print(f"[DATA] SecurityList RequestID: {req_id}")
+
             no_related_sym = fix.NoRelatedSym()
             if message.isSetField(no_related_sym):
                 message.getField(no_related_sym)
                 count = no_related_sym.getValue()
                 print(f"[DATA] SecurityList with {count} instruments")
 
+                self.security_list_received = True
+                self.security_instruments = []
+
                 group = fix44.SecurityList.NoRelatedSym()
                 for i in range(1, count + 1):
                     message.getGroup(i, group)
+
                     symbol = fix.Symbol()
                     if group.isSetField(symbol):
                         group.getField(symbol)
-                        print(f"[DATA] Instrument: {symbol.getValue()}")
-            else:
-                print("[DATA] SecurityList received (empty or no symbols)")
+                        sym = symbol.getValue()
+                        self.security_instruments.append(sym)
+                        print(f"[DATA] Instrument: {sym}")
+
+            if self.security_list_received:
+                Timer(2.0, self.subscribe_all).start()
+
         except Exception as e:
-            print(f"[ERROR] Processing security list: {e}")
+            print(f"[ERROR] Processing SecurityList: {e}")
+
+    def send_security_list_request(self):
+        try:
+            if not self.session_id or not self.trading_session_active:
+                print("[WARN] Cannot send SecurityListRequest - session not active")
+                return
+
+            msg = fix44.SecurityListRequest()
+            msg.setField(fix.SecurityReqID(f"SL_{datetime.now().strftime('%H%M%S%f')}"))
+            msg.setField(fix.SecurityListRequestType(4))
+
+            fix.Session.sendToTarget(msg, self.session_id)
+            print("[SEND] SecurityListRequest sent")
+
+        except Exception as e:
+            print(f"[ERROR] Sending SecurityListRequest: {e}")
 
     def subscribe_all(self):
         if not self.session_id or not self.trading_session_active:
             print("[WARN] Cannot subscribe - session not active")
             return
 
-        instruments = ["EUR/USD", "GBP/USD", "USD/CAD", "EUR/USD_ON", "GBP/USD_TN", "USD/CAD_TOM1W", "EUR/USD_2W"]
+        instruments = [
+            ("EUR/USD", "SPOT", 100000),
+            ("GBP/USD", "SPOT", 100000),
+            ("USD/CAD", "SPOT", 100000),
+            ("USD/CAD_TOM", "TOM", 100000),
+            ("EUR/USD_ON", "SWAP", 100000),
+            ("GBP/USD_TN", "SWAP", 100000),
+            ("USD/CAD_TOM1W", "SWAP", 100000),
+            ("EUR/USD_2W", "FORWARD", 100000),
+            ("GBP/USD_1Y", "FORWARD", 100000),
+        ]
 
-        for i, symbol in enumerate(instruments):
+        rfs_instruments = [
+            ("EUR/USD_SPOT", "SPOT", 100000),
+            ("EUR/USD_1W", "SWAP", 100000),
+            ("EUR/USD_TN", "SWAP", 100000),
+        ]
+
+        broken_instruments = [
+            ("EUR/USD_OUT", "BROKEN", 100000),
+            ("EUR/USD_SWAP", "BROKEN", 100000),
+            ("USD_OUT", "BROKEN", 100000),
+            ("EUD/USK_SPOT", "NONEXISTENT", 100000)
+        ]
+
+        all_instruments = instruments + rfs_instruments + broken_instruments
+
+        for i, (symbol, inst_type, quantity) in enumerate(all_instruments):
             try:
-                delay = i * 0.3
-                Timer(delay, lambda sym=symbol: self.send_market_data_request(sym)).start()
+                delay = i * 0.5
+                Timer(delay, lambda s=symbol, q=quantity: self.send_market_data_request(s, q)).start()
                 print(f"[SEND] Scheduled subscription to {symbol} in {delay}s")
             except Exception as e:
                 print(f"[ERROR] Scheduling subscription for {symbol}: {e}")
 
-    def send_market_data_request(self, symbol):
+    def send_market_data_request(self, symbol, quantity=100000):
         try:
             if not self.session_id or not self.trading_session_active:
                 return
 
-            md_req_id = f"MD_{symbol.replace('/', '')}_{datetime.now().strftime('%H%M%S')}"
+            md_req_id = f"MD_{symbol.replace('/', '')}_{datetime.now().strftime('%H%M%S%f')}"
 
             message = fix44.MarketDataRequest()
             message.setField(fix.MDReqID(md_req_id))
@@ -421,6 +457,7 @@ class FIXApplication(fix.Application):
 
             related_sym_group = fix44.MarketDataRequest.NoRelatedSym()
             related_sym_group.setField(fix.Symbol(symbol))
+            related_sym_group.setField(fix.OrderQty(quantity))
             message.addGroup(related_sym_group)
 
             entry_types = ['0', '1']
@@ -431,7 +468,8 @@ class FIXApplication(fix.Application):
 
             fix.Session.sendToTarget(message, self.session_id)
 
-            print(f"[SEND] Subscribed to {symbol}")
+            self.market_data_subscriptions[symbol] = md_req_id
+            print(f"[SEND] Subscribed to {symbol} with quantity {quantity} (ReqID: {md_req_id})")
 
         except Exception as e:
             print(f"[ERROR] Sending MarketDataRequest for {symbol}: {e}")
@@ -468,3 +506,37 @@ class FIXApplication(fix.Application):
                 print(f"[SEND] Unsubscribed from {symbol}")
         except Exception as e:
             print(f"[ERROR] Unsubscribing from {symbol}: {e}")
+
+    def processQuoteRequestReject(self, message):
+        try:
+            quote_req_id = fix.QuoteReqID()
+            quote_reject_reason = fix.QuoteRejectReason()
+            text = fix.Text()
+
+            if message.isSetField(quote_req_id):
+                message.getField(quote_req_id)
+                req_id = quote_req_id.getValue()
+                print(f"[REJECT] QuoteRequestReject for ReqID: {req_id}")
+
+            if message.isSetField(quote_reject_reason):
+                message.getField(quote_reject_reason)
+                reason = quote_reject_reason.getValue()
+                reason_map = {
+                    "1": "Unknown symbol",
+                    "2": "Exchange closed",
+                    "3": "Quote request exceeds limit",
+                    "4": "Too late to enter",
+                    "5": "Invalid price",
+                    "6": "Not authorized",
+                    "7": "No market for instrument",
+                    "99": "Other"
+                }
+                print(f"[REJECT] Reason: {reason} - {reason_map.get(reason, 'Unknown')}")
+
+            if message.isSetField(text):
+                message.getField(text)
+                text_val = text.getValue()
+                print(f"[REJECT] Text: {text_val}")
+
+        except Exception as e:
+            print(f"[ERROR] Processing QuoteRequestReject: {e}")

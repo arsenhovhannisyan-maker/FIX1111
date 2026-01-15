@@ -168,7 +168,6 @@ async def create_order(
         quantity: float,
         order_type: str = "LIMIT",
         price: float = None,
-        time_in_force: str = "DAY"
 ):
     if not sessions["om"]["ready"] or not sessions["om"]["app"]:
         raise HTTPException(500, detail="Order session not ready")
@@ -188,22 +187,12 @@ async def create_order(
     }
     order_type_fix = order_type_map.get(order_type.upper(), "2")
 
-    time_in_force_map = {
-        "DAY": "0",
-        "GTC": "1",
-        "IOC": "3",
-        "FOK": "4",
-        "GTD": "6"
-    }
-    time_in_force_fix = time_in_force_map.get(time_in_force.upper(), "0")
-
     cl_ord_id = om_app.send_new_order_single(
         symbol=symbol,
         side=side_fix,
         quantity=quantity,
         price=price,
         order_type=order_type_fix,
-        time_in_force=time_in_force_fix
     )
 
     if not cl_ord_id:
@@ -217,7 +206,6 @@ async def create_order(
         "quantity": quantity,
         "price": price,
         "order_type": order_type,
-        "time_in_force": time_in_force,
         "timestamp": datetime.now().isoformat()
     }
 
@@ -309,14 +297,18 @@ async def get_status():
         "ready": sessions["md"]["ready"],
         "connected": False,
         "active": False,
-        "instruments": 0
+        "security_list_received": False,
+        "instruments_count": 0,
+        "subscriptions_count": 0
     }
 
     if sessions["md"]["ready"] and sessions["md"]["app"]:
         md_app = sessions["md"]["app"]
         md_status["connected"] = getattr(md_app, 'logon_sent', False)
         md_status["active"] = getattr(md_app, 'trading_session_active', False)
-        md_status["instruments"] = market_data_store.get_count() if hasattr(market_data_store, 'get_count') else 0
+        md_status["security_list_received"] = getattr(md_app, 'security_list_received', False)
+        md_status["instruments_count"] = len(getattr(md_app, 'security_instruments', []))
+        md_status["subscriptions_count"] = len(getattr(md_app, 'market_data_subscriptions', {}))
 
     status_info["sessions"]["market_data"] = md_status
 
@@ -350,6 +342,34 @@ async def health_check():
         "status": overall_status,
         "market_data": "up" if md_ok else "down",
         "order_session": "up" if om_ok else "down",
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.get("/security/list")
+async def get_security_list():
+    if not sessions["md"]["ready"] or not sessions["md"]["app"]:
+        raise HTTPException(500, detail="Market Data session not ready")
+
+    md_app = sessions["md"]["app"]
+
+    return {
+        "status": "success",
+        "security_list_received": md_app.security_list_received,
+        "instruments": md_app.security_instruments,
+        "count": len(md_app.security_instruments),
+        "timestamp": datetime.now().isoformat()
+    }
+
+@app.post("/security/request")
+async def request_security_list():
+    if not sessions["md"]["ready"] or not sessions["md"]["app"]:
+        raise HTTPException(500, detail="Market Data session not ready")
+
+    Timer(0.1, lambda: sessions["md"]["app"].send_security_list_request()).start()
+
+    return {
+        "status": "request_sent",
+        "message": "SecurityList request sent",
         "timestamp": datetime.now().isoformat()
     }
 

@@ -1,0 +1,25 @@
+20260114-12:31:46.575864000 : Created session
+20260114-12:31:46.576913000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
+20260114-12:31:46.818674000 : Initiated logon request
+20260114-12:31:46.941827000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
+20260114-12:31:46.942090000 : Received logon response
+20260114-12:31:49.755496000 : Message 6 Rejected: Value is incorrect (out of range) for this tag:281
+20260114-12:31:50.065656000 : Message 8 Rejected: Value is incorrect (out of range) for this tag:281
+20260114-12:31:50.353874000 : Message 10 Rejected: Value is incorrect (out of range) for this tag:281
+20260114-12:31:50.641135000 : Message 13 Rejected: Value is incorrect (out of range) for this tag:281
+20260114-12:31:50.936119000 : Message 15 Rejected: Value is incorrect (out of range) for this tag:281
+20260114-12:31:51.242176000 : Message 17 Rejected: Value is incorrect (out of range) for this tag:281
+20260114-12:31:51.532114000 : Message 18 Rejected: Value is incorrect (out of range) for this tag:281
+20260114-13:46:21.846724000 : Initiated logout request
+20260114-13:46:21.967635000 : Received logout response
+20260114-13:46:21.968121000 : Disconnecting
+20260114-14:20:56.590776000 : Created session
+20260114-14:20:56.591545000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
+20260114-14:20:56.919330000 : Initiated logon request
+20260114-14:20:57.020514000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
+20260114-14:20:57.021483000 : Received logon response
+20260115-07:09:55.953743000 : Created session
+20260115-07:09:55.955642000 : Connecting to dsp-east-uat.ntprog.com on port 24421 (Source :0)
+20260115-07:09:57.196766000 : Initiated logon request
+20260115-07:09:57.305238000 : Logon contains ResetSeqNumFlag=Y, reseting sequence numbers to 1
+20260115-07:09:57.305559000 : Received logon response
