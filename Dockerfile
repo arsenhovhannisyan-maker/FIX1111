@@ -8,14 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
+RUN mkdir -p log store fix
+
 COPY fix/FIX44.xml /app/fix/FIX44.xml
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-RUN mkdir -p log store fix
 
 EXPOSE 8000
 

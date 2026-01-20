@@ -4,8 +4,8 @@ from threading import Timer
 from fastapi import FastAPI, HTTPException
 import uvicorn
 from contextlib import asynccontextmanager
-from fix_md_session import FIXApplication as MDApp
-from fix_om_session import OrderSession as OMApp
+from fix_md_session import FIXMarketDataApp
+from fix_om_session import OrderSession
 from data_store import market_data_store
 from urllib.parse import unquote
 
@@ -16,90 +16,55 @@ sessions = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global sessions
     try:
-        print("[INIT] Starting Market Data session...")
-        md_settings = fix.SessionSettings("settings_md.cfg")
-        sessions["md"]["app"] = MDApp()
-
-        md_initiator = fix.SocketInitiator(
+        settings = fix.SessionSettings("settings_md.cfg")
+        sessions["md"]["app"] = FIXMarketDataApp()
+        sessions["md"]["initiator"] = fix.SocketInitiator(
             sessions["md"]["app"],
-            fix.FileStoreFactory(md_settings),
-            md_settings,
-            fix.FileLogFactory(md_settings)
+            fix.FileStoreFactory(settings),
+            settings,
+            fix.FileLogFactory(settings)
         )
-        md_initiator.start()
-        sessions["md"]["initiator"] = md_initiator
+        sessions["md"]["initiator"].start()
         sessions["md"]["ready"] = True
-        print("[MD] ✓ Market Data session started")
+        print("[MD] Session started")
     except Exception as e:
-        print(f"[MD] ✗ Error starting Market Data session: {e}")
-        sessions["md"]["ready"] = False
+        print(f"[MD] Error: {e}")
 
     try:
-        print("[INIT] Starting Order session...")
-        om_settings = fix.SessionSettings("settings_om.cfg")
-        sessions["om"]["app"] = OMApp()
-
-        om_initiator = fix.SocketInitiator(
+        settings = fix.SessionSettings("settings_om.cfg")
+        sessions["om"]["app"] = OrderSession()
+        sessions["om"]["initiator"] = fix.SocketInitiator(
             sessions["om"]["app"],
-            fix.FileStoreFactory(om_settings),
-            om_settings,
-            fix.FileLogFactory(om_settings)
+            fix.FileStoreFactory(settings),
+            settings,
+            fix.FileLogFactory(settings)
         )
-        om_initiator.start()
-        sessions["om"]["initiator"] = om_initiator
+        sessions["om"]["initiator"].start()
         sessions["om"]["ready"] = True
-        print("[OM] ✓ Order session started")
+        print("[OM] Session started")
     except Exception as e:
-        print(f"[OM] ✗ Error starting Order session: {e}")
-        sessions["om"]["ready"] = False
+        print(f"[OM] Error: {e}")
 
-    Timer(3.0, auto_subscribe_md).start()
+    Timer(3.0, auto_subscribe).start()
 
     yield
 
-    print("[INIT] Stopping sessions...")
     for name in ["md", "om"]:
         if sessions[name]["initiator"]:
-            try:
-                sessions[name]["initiator"].stop()
-                print(f"[{name.upper()}] ✓ Session stopped")
-            except Exception as e:
-                print(f"[{name.upper()}] ✗ Error stopping session: {e}")
+            sessions[name]["initiator"].stop()
 
-def auto_subscribe_md():
-    if not sessions["md"]["ready"] or not sessions["md"]["app"]:
-        print("[AUTO-SUB] Skipping - MD session not ready")
+def auto_subscribe():
+    if not sessions["md"]["ready"]:
         return
 
-    instruments = [
-        "EUR/USD",
-        "GBP/USD",
-        "USD/CAD",
-        "EUR/USD_ON",
-        "GBP/USD_TN",
-        "USD/CAD_TOM1W",
-        "EUR/USD_2W"
-    ]
+    instruments = ["EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD"]
 
-    delay = 0.0
-    for instrument in instruments:
-        Timer(delay, lambda sym=instrument: subscribe_instrument(sym)).start()
-        delay += 0.3
+    for i, instrument in enumerate(instruments):
+        Timer(i * 0.5 + 6.0, lambda sym=instrument: sessions["md"]["app"].send_market_data_request(sym)).start()
+        print(f"[AUTO] Will subscribe to {instrument} in {i*0.5+6.0} seconds")
 
-def subscribe_instrument(symbol: str):
-    """Подписаться на инструмент"""
-    if sessions["md"]["app"]:
-        sessions["md"]["app"].send_market_data_request(symbol)
-        print(f"[AUTO-SUB] ✓ Subscribed to {symbol}")
-
-app = FastAPI(
-    title="FIX Trading API",
-    description="API для работы с FIX Market Data и Order Execution",
-    version="1.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="FIX Trading API", version="1.0", lifespan=lifespan)
 
 @app.get("/market")
 async def get_market_data():
@@ -119,7 +84,23 @@ async def get_symbol_data(symbol: str):
     decoded_symbol = unquote(symbol)
     data = market_data_store.get(decoded_symbol)
     if not data:
-        raise HTTPException(404, detail=f"Symbol {decoded_symbol} not found")
+        possible_symbols = [
+            decoded_symbol,
+            decoded_symbol.replace('/', '_'),
+            decoded_symbol.replace('_', '/')
+        ]
+
+        for sym in possible_symbols:
+            data = market_data_store.get(sym)
+            if data:
+                break
+
+        if not data:
+            available = list(market_data_store.keys())
+            raise HTTPException(
+                404,
+                detail=f"Symbol '{decoded_symbol}' not found. Available: {available}"
+            )
 
     return {
         "status": "success",
@@ -130,36 +111,21 @@ async def get_symbol_data(symbol: str):
 
 @app.post("/market/subscribe/{symbol:path}")
 async def subscribe_symbol(symbol: str):
-    if not sessions["md"]["ready"] or not sessions["md"]["app"]:
-        raise HTTPException(500, detail="Market Data session not ready")
+    if not sessions["md"]["ready"]:
+        raise HTTPException(500, "MD session not ready")
 
     decoded_symbol = unquote(symbol)
+    sessions["md"]["app"].send_market_data_request(decoded_symbol)
+    return {"status": "subscribed", "symbol": decoded_symbol}
 
-    Timer(0.1, lambda: sessions["md"]["app"].send_market_data_request(decoded_symbol)).start()
-
-    return {
-        "status": "subscribed",
-        "symbol": decoded_symbol,
-        "message": f"Subscription request sent for {decoded_symbol}",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.post("/market/unsubscribe/{symbol}")
+@app.post("/market/unsubscribe/{symbol:path}")
 async def unsubscribe_symbol(symbol: str):
-    if not sessions["md"]["ready"] or not sessions["md"]["app"]:
-        raise HTTPException(500, detail="Market Data session not ready")
+    if not sessions["md"]["ready"]:
+        raise HTTPException(500, "MD session not ready")
 
-    if hasattr(sessions["md"]["app"], 'send_market_data_unsubscribe'):
-        sessions["md"]["app"].send_market_data_unsubscribe(symbol)
-    else:
-        sessions["md"]["app"].send_market_data_request(symbol, subscription_type="2")
-
-    return {
-        "status": "unsubscribed",
-        "symbol": symbol,
-        "message": f"Unsubscription request sent for {symbol}",
-        "timestamp": datetime.now().isoformat()
-    }
+    decoded_symbol = unquote(symbol)
+    sessions["md"]["app"].send_market_data_unsubscribe(decoded_symbol)
+    return {"status": "unsubscribed", "symbol": decoded_symbol}
 
 @app.post("/order")
 async def create_order(
@@ -168,24 +134,21 @@ async def create_order(
         quantity: float,
         order_type: str = "LIMIT",
         price: float = None,
+        time_in_force: str = "GTC"
 ):
-    if not sessions["om"]["ready"] or not sessions["om"]["app"]:
-        raise HTTPException(500, detail="Order session not ready")
+    if not sessions["om"]["ready"]:
+        raise HTTPException(500, "OM session not ready")
 
     om_app = sessions["om"]["app"]
 
     if not om_app.trading_session_open:
-        raise HTTPException(400, detail="Trading session not open. Wait for TradingSessionStatus")
+        raise HTTPException(400, "Trading session not open")
 
-    side_fix = "1" if side.upper() in ["BUY", "B", "1"] else "2"
+    side_fix = "1" if side.upper() in ["BUY", "B"] else "2"
+    order_type_fix = "1" if order_type.upper() == "MARKET" else "2"
 
-    order_type_map = {
-        "MARKET": "1",
-        "LIMIT": "2",
-        "STOP": "3",
-        "STOP_LIMIT": "4"
-    }
-    order_type_fix = order_type_map.get(order_type.upper(), "2")
+    tif_map = {"GTC": "1", "IOC": "3", "FOK": "4", "GTD": "6"}
+    tif_fix = tif_map.get(time_in_force.upper(), "1")
 
     cl_ord_id = om_app.send_new_order_single(
         symbol=symbol,
@@ -193,212 +156,113 @@ async def create_order(
         quantity=quantity,
         price=price,
         order_type=order_type_fix,
+        time_in_force=tif_fix
     )
 
     if not cl_ord_id:
-        raise HTTPException(500, detail="Failed to send order")
+        raise HTTPException(500, "Failed to send order")
 
     return {
-        "status": "sent",
         "cl_ord_id": cl_ord_id,
         "symbol": symbol,
         "side": side,
         "quantity": quantity,
-        "price": price,
         "order_type": order_type,
-        "timestamp": datetime.now().isoformat()
+        "time_in_force": time_in_force
     }
 
 @app.get("/orders")
 async def get_orders():
-    if not sessions["om"]["ready"] or not sessions["om"]["app"]:
-        raise HTTPException(500, detail="Order session not ready")
-
+    if not sessions["om"]["ready"]:
+        raise HTTPException(500, "OM session not ready")
     return sessions["om"]["app"].get_all_orders()
-
-@app.get("/orders/{cl_ord_id}")
-async def get_order(cl_ord_id: str):
-    if not sessions["om"]["ready"] or not sessions["om"]["app"]:
-        raise HTTPException(500, detail="Order session not ready")
-
-    order_info = sessions["om"]["app"].get_order_info(cl_ord_id)
-    if not order_info:
-        raise HTTPException(404, detail=f"Order {cl_ord_id} not found")
-
-    return order_info
 
 @app.post("/orders/{cl_ord_id}/cancel")
 async def cancel_order(cl_ord_id: str):
-    if not sessions["om"]["ready"] or not sessions["om"]["app"]:
-        raise HTTPException(500, detail="Order session not ready")
+    if not sessions["om"]["ready"]:
+        raise HTTPException(500, "OM session not ready")
 
-    om_app = sessions["om"]["app"]
+    if not sessions["om"]["app"].send_order_cancel_request(cl_ord_id):
+        raise HTTPException(400, "Cancel failed")
 
-    if not om_app.trading_session_open:
-        raise HTTPException(400, detail="Trading session not open")
-
-    order_info = om_app.get_order_info(cl_ord_id)
-    if not order_info:
-        raise HTTPException(404, detail=f"Order {cl_ord_id} not found")
-
-    success = om_app.send_order_cancel_request(
-        cl_ord_id,
-        order_info.get("symbol"),
-        order_info.get("side")
-    )
-
-    if not success:
-        raise HTTPException(500, detail="Failed to send cancel request")
-
-    return {
-        "status": "cancel_sent",
-        "cl_ord_id": cl_ord_id,
-        "message": "Cancel request sent successfully",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.post("/orders/{cl_ord_id}/status")
-async def request_order_status(cl_ord_id: str):
-    if not sessions["om"]["ready"] or not sessions["om"]["app"]:
-        raise HTTPException(500, detail="Order session not ready")
-
-    om_app = sessions["om"]["app"]
-
-    if not om_app.trading_session_open:
-        raise HTTPException(400, detail="Trading session not open")
-
-    success = om_app.send_order_status_request(cl_ord_id)
-
-    if not success:
-        raise HTTPException(500, detail="Failed to send status request")
-
-    return {
-        "status": "status_request_sent",
-        "cl_ord_id": cl_ord_id,
-        "message": "Status request sent successfully",
-        "timestamp": datetime.now().isoformat()
-    }
-
-@app.get("/executions")
-async def get_executions():
-    if not sessions["om"]["ready"] or not sessions["om"]["app"]:
-        raise HTTPException(500, detail="Order session not ready")
-
-    return sessions["om"]["app"].get_execution_history()
+    return {"status": "cancel_sent", "cl_ord_id": cl_ord_id}
 
 @app.get("/status")
 async def get_status():
-    status_info = {
-        "timestamp": datetime.now().isoformat(),
-        "sessions": {}
+    md_app = sessions["md"]["app"]
+    om_app = sessions["om"]["app"]
+
+    return {
+        "market_data": {
+            "ready": sessions["md"]["ready"],
+            "connected": getattr(md_app, 'logon_sent', False) if md_app else False,
+            "active": getattr(md_app, 'market_session_active', False) if md_app else False,
+            "subscriptions": len(getattr(md_app, 'market_data_subscriptions', {})),
+            "instruments_loaded": getattr(md_app, 'security_list_received', False),
+            "instrument_count": len(getattr(md_app, 'security_instruments', []))
+        },
+        "order_session": {
+            "ready": sessions["om"]["ready"],
+            "connected": getattr(om_app, 'logon_sent', False) if om_app else False,
+            "open": getattr(om_app, 'trading_session_open', False) if om_app else False,
+            "orders": len(getattr(om_app, 'orders', {}))
+        }
     }
-
-    md_status = {
-        "ready": sessions["md"]["ready"],
-        "connected": False,
-        "active": False,
-        "security_list_received": False,
-        "instruments_count": 0,
-        "subscriptions_count": 0
-    }
-
-    if sessions["md"]["ready"] and sessions["md"]["app"]:
-        md_app = sessions["md"]["app"]
-        md_status["connected"] = getattr(md_app, 'logon_sent', False)
-        md_status["active"] = getattr(md_app, 'trading_session_active', False)
-        md_status["security_list_received"] = getattr(md_app, 'security_list_received', False)
-        md_status["instruments_count"] = len(getattr(md_app, 'security_instruments', []))
-        md_status["subscriptions_count"] = len(getattr(md_app, 'market_data_subscriptions', {}))
-
-    status_info["sessions"]["market_data"] = md_status
-
-    om_status = {
-        "ready": sessions["om"]["ready"],
-        "connected": False,
-        "trading_session_open": False,
-        "orders_count": 0,
-        "executions_count": 0
-    }
-
-    if sessions["om"]["ready"] and sessions["om"]["app"]:
-        om_app = sessions["om"]["app"]
-        om_status["connected"] = getattr(om_app, 'logon_sent', False)
-        om_status["trading_session_open"] = getattr(om_app, 'trading_session_open', False)
-        om_status["orders_count"] = len(om_app.order_store)
-        om_status["executions_count"] = len(om_app.execution_reports)
-
-    status_info["sessions"]["order_session"] = om_status
-
-    return status_info
 
 @app.get("/health")
 async def health_check():
-    md_ok = sessions["md"]["ready"] and sessions["md"]["app"] and getattr(sessions["md"]["app"], 'logon_sent', False)
-    om_ok = sessions["om"]["ready"] and sessions["om"]["app"] and getattr(sessions["om"]["app"], 'logon_sent', False)
-
-    overall_status = "healthy" if md_ok and om_ok else "degraded"
-
     return {
-        "status": overall_status,
-        "market_data": "up" if md_ok else "down",
-        "order_session": "up" if om_ok else "down",
-        "timestamp": datetime.now().isoformat()
+        "status": "ok",
+        "market_data": "up" if sessions["md"]["ready"] else "down",
+        "order_session": "up" if sessions["om"]["ready"] else "down"
     }
 
-@app.get("/security/list")
-async def get_security_list():
-    if not sessions["md"]["ready"] or not sessions["md"]["app"]:
-        raise HTTPException(500, detail="Market Data session not ready")
+@app.get("/instruments")
+async def get_instruments():
+    if not sessions["md"]["ready"]:
+        raise HTTPException(500, "MD session not ready")
 
     md_app = sessions["md"]["app"]
-
     return {
         "status": "success",
-        "security_list_received": md_app.security_list_received,
-        "instruments": md_app.security_instruments,
-        "count": len(md_app.security_instruments),
-        "timestamp": datetime.now().isoformat()
+        "instruments": getattr(md_app, 'security_instruments', []),
+        "count": len(getattr(md_app, 'security_instruments', []))
     }
 
-@app.post("/security/request")
-async def request_security_list():
-    if not sessions["md"]["ready"] or not sessions["md"]["app"]:
-        raise HTTPException(500, detail="Market Data session not ready")
+@app.get("/security/definition/{symbol:path}")
+async def get_security_definition(symbol: str):
+    if not sessions["md"]["ready"]:
+        raise HTTPException(500, "MD session not ready")
 
-    Timer(0.1, lambda: sessions["md"]["app"].send_security_list_request()).start()
+    decoded_symbol = unquote(symbol)
+    req_id = sessions["md"]["app"].send_security_definition_request(decoded_symbol)
+    return {"status": "request_sent", "symbol": decoded_symbol, "request_id": req_id}
+
+@app.post("/instruments/refresh")
+async def refresh_instruments():
+    if not sessions["md"]["ready"]:
+        raise HTTPException(500, "MD session not ready")
+
+    req_id = sessions["md"]["app"].send_security_list_request()
+    return {
+        "status": "request_sent",
+        "request_id": req_id
+    }
+@app.post("/instruments/refresh")
+async def refresh_instruments():
+    if not sessions["md"]["ready"]:
+        raise HTTPException(500, "MD session not ready")
+
+    req_id = sessions["md"]["app"].send_security_list_request()
+    if not req_id:
+        raise HTTPException(400, "SecurityListRequest not supported by counterparty")
 
     return {
         "status": "request_sent",
-        "message": "SecurityList request sent",
-        "timestamp": datetime.now().isoformat()
+        "request_id": req_id
     }
 
 if __name__ == "__main__":
-    print("=" * 50)
     print("FIX Trading API Server")
-    print("=" * 50)
-    print("Configurations:")
-    print("  Market Data: settings_md.cfg")
-    print("  Order Session: settings_om.cfg")
-    print(f"  Port: 8000")
-    print("\nAvailable Endpoints:")
-    print("\n  Market Data:")
-    print("    GET  /market               - Get all market data")
-    print("    GET  /market/{symbol}      - Get symbol data")
-    print("    POST /market/subscribe/{symbol} - Subscribe to symbol")
-    print("    POST /market/unsubscribe/{symbol} - Unsubscribe from symbol")
-
-    print("\n  Order Session:")
-    print("    POST /order                - Create new order")
-    print("    GET  /orders               - Get all orders")
-    print("    GET  /orders/{id}          - Get order details")
-    print("    POST /orders/{id}/cancel   - Cancel order")
-    print("    POST /orders/{id}/status   - Request order status")
-    print("    GET  /executions           - Get execution history")
-
-    print("\n  System:")
-    print("    GET  /status               - Get system status")
-    print("    GET  /health               - Health check")
-    print("=" * 50)
-
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    print("Port: 8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
